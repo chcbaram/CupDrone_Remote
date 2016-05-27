@@ -300,6 +300,7 @@ uint8_t cBLE::save_list( void )
 
 	BleListEEPROM.Count    = BleList.Count;
 	BleListEEPROM.SaveFlag = BLE_SAVE_FLAG;
+	BleListEEPROM.JoyMode  = BleList.JoyMode;
 	
 	//EEPROM.put(0, BleList);
 
@@ -349,8 +350,8 @@ uint8_t cBLE::load_list( void )
 	}
 	else
 	{
-		BleList.Count = BleListEEPROM.Count;
-
+		BleList.Count   = BleListEEPROM.Count;
+		BleList.JoyMode = BleListEEPROM.JoyMode; 
 		for( i=0; i<BleList.Count; i++ )
 		{
 			BleList.strName[i] = String(BleListEEPROM.strName[i]);

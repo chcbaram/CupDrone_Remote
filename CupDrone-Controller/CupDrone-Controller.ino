@@ -18,10 +18,10 @@
 
 // 왼좌우 :  A2   / 왼위아래 :   A3 
 // 오좌우 :  A0   / 오위아래 :   A1
-#define JOY_IN_THRUST        A0
-#define JOY_IN_ROLL          A1
-#define JOY_IN_PITCH         A2	
-#define JOY_IN_YAW           A3
+#define JOY_IN_THRUST           A0
+#define JOY_IN_ROLL             A1
+#define JOY_IN_PITCH            A2	
+#define JOY_IN_YAW              A3
 
 
 // Button
@@ -32,23 +32,21 @@
 #define KEY_ENTER  			    7
 
 
-#define STATE_MENU_MAIN		    0
-#define STATE_MENU_BLE          1	
-#define STATE_MENU_CONNECT      2	
-#define STATE_LOOP_MODE         3	
-#define STATE_LOOP_REMOTE       4
-#define STATE_LOOP_TRIM         5
+#define MENU_0_IDLE		    	0
+#define MENU_0_RUN				1
+#define MENU_1_IDLE				2        
+#define MENU_1_RUN				3
+
+#define STATE_MENU_BLE          0	
+#define STATE_MENU_MODE         1	
+#define STATE_MENU_REMOTE       2
+#define STATE_MENU_TRIM         3
+#define STATE_MENU_SAVE         4
 
 
-#define RUN_0_BLE               0
-#define RUN_0_MODE              1
-#define RUN_0_REMOTE            2
-#define RUN_0_TRIM              3
-#define RUN_0_SAVE              4
-
-#define RUN_1_BLE_SETUP         5
-#define RUN_1_BLE_SCAN          6
-#define RUN_1_BLE_CONNECT       7
+#define RUN_BLE_SETUP           0
+#define RUN_BLE_SCAN            1
+#define RUN_BLE_CONNECT         2
 
 
 
@@ -82,15 +80,16 @@ cKEY	 Key;
 cJOY     *pJoy[2];
 
 
-uint8_t joy_mode   = 0;
-uint8_t main_state = 0;
-
+uint8_t joy_mode    = 0;
+uint8_t remote_mode = 0;
 
 uint8_t  take_off_state = 0;
 bool     take_off = false;
 uint16_t take_off_time    = TAKE_OFF_TIME;
-uint16_t take_off_thrust  = TAKE_OFF_TRUST;
+int16_t  take_off_thrust  = TAKE_OFF_TRUST;
 
+
+#define MENU_MAX     2
 
 #define MENU_0_ITEMS 5
 char *menu_0_strings[MENU_0_ITEMS] = { "BLE", 
@@ -105,10 +104,7 @@ char *menu_1_strings[MENU_1_ITEMS] = { "BLE_SETUP",
                                        "BLE_CONNECT" };
 
 
-uint8_t menu_items[2]   = { 5, 3 };
-uint8_t menu_current = 0;
-
-
+uint8_t menu_items[MENU_MAX]   = { MENU_0_ITEMS, MENU_1_ITEMS };
 uint8_t menu_redraw_required = 0;
 
 
@@ -145,14 +141,15 @@ void setup()
 	pJoy[1] = &JoyR;
 
 
-	menu_redraw_required = 1;
+	lcd_redraw();
 
 
 	lcd_draw_str( 0, 0, "Remote For CupDrone" );
-	delay(1500);
+	delay(500);
 
 	if( Ble.load_list() == BLE_OK )
 	{
+		joy_mode = Ble.BleList.JoyMode;
 		lcd_draw_str( 0, 0, "Loading...OK" );
 	}
 	else
@@ -160,7 +157,9 @@ void setup()
 		lcd_draw_str( 0, 0, "Loading...No Data" );
 	}
 
-	delay(1000);
+	delay(500);
+
+	run_ble_setup();
 }
 
 
@@ -177,12 +176,292 @@ void loop()
 }
 
 
+void loop_main()
+{
+	static uint8_t state = MENU_0_IDLE;
+	static uint8_t menu_0_index = 0;
+	static uint8_t menu_1_index = 0;
 
+
+	Key.use_joypad = false;
+
+	switch( state )
+	{
+		case MENU_0_IDLE:
+			Key.use_joypad = true;
+
+			menu_0_index = loop_menu(0);
+
+			if( Key.get_enter() || Key.get_right() )
+			{
+				state = MENU_0_RUN; 
+			}
+			take_off_state = 0;
+			take_off       = false;
+			break;
+
+		case MENU_0_RUN:
+			lcd_redraw();
+			state = run_menu_0( MENU_0_RUN, menu_0_index );
+			break;
+
+		case MENU_1_IDLE:
+			Key.use_joypad = true;
+
+			menu_1_index = loop_menu_ble_list();		
+
+			if( Key.get_enter() || Key.get_right() )
+			{
+				run_ble_connect( menu_1_index );
+				lcd_redraw();
+				state = MENU_0_RUN;
+			}
+			if( Key.get_left() )
+			{
+				lcd_redraw();
+				state = MENU_0_RUN;				
+			}		
+			break;
+
+		default:
+			state = MENU_0_IDLE;
+			break;
+	}
+}
+
+
+uint8_t run_menu_0( uint8_t cur_state, int menu_sel )
+{
+	uint8_t ret_state = cur_state;
+	uint8_t menu_index;
+	uint8_t err_code;
+	char Str[24];
+	String strRet;
+	static uint32_t tTime;
+
+	remote_mode = 0;
+
+	switch( menu_sel )
+	{
+		case STATE_MENU_BLE:
+			Key.use_joypad = true;
+
+			menu_index = loop_menu(1);
+			lcd_draw_menu(1, menu_index);
+
+			if( Key.get_enter() || Key.get_right() )
+			{
+				if( menu_index == RUN_BLE_SETUP )   run_ble_setup();
+				if( menu_index == RUN_BLE_SCAN )    run_ble_scan();
+				if( menu_index == RUN_BLE_CONNECT )
+				{
+					lcd_redraw();
+					ret_state = MENU_1_IDLE;
+				}
+				lcd_redraw();
+			}
+			if( Key.get_left() )
+			{
+				lcd_redraw();
+				ret_state = MENU_0_IDLE;
+			}			
+			break;
+
+		case STATE_MENU_MODE:
+			Key.use_joypad = true;
+
+			if( joy_mode == 0 ) lcd_draw_str( 0, 0, "MODE LEFT" );
+			else                lcd_draw_str( 0, 0, "MODE RIGHT"); 
+
+			if( Key.get_enter() || Key.get_right() )
+			{
+				change_joymode();
+				lcd_redraw();
+			}
+			if( Key.get_left() )
+			{
+				lcd_redraw();
+				ret_state = MENU_0_IDLE;
+			}				
+			break;
+
+		case STATE_MENU_REMOTE:
+			Key.use_joypad = false;
+			remote_mode = 1;
+
+			if( (millis()-tTime) > 200 )
+			{
+				lcd_redraw();
+				tTime = millis();
+			}
+			lcd_draw_remote();
+			
+			if( Key.get_enter() )
+			{
+				lcd_redraw();
+				ret_state = MENU_0_IDLE;
+			}		
+
+			if(  Key.get_down() && Msp.bConnected == true )
+			{
+				Msp.SendCmd_ARM();
+             	lcd_draw_str( 0, 0, "Send ARM     " );
+              	delay(1000);		
+			}	
+			if( Key.get_up() && Msp.bConnected == true )
+			{
+				Msp.SendCmd_DISARM();
+             	lcd_draw_str( 0, 0, "Send DISARM     " );
+              	delay(1000);				
+			}	
+			if( Key.get_left() )
+			{
+				take_off_thrust += joy_yaw;
+				if( take_off_thrust > 1000 ) take_off_thrust = 1000;
+				if( take_off_thrust < 100  ) take_off_thrust = 100;
+			}	
+
+			loop_take_off();
+			break;
+
+		case STATE_MENU_TRIM:
+			if( Key.get_up() && Msp.bConnected == true )
+			{
+				Msp.SendCmd_TRIM_UP();
+            	lcd_draw_str( 0, 0, "Up" );
+              	delay(1000);			   
+			}
+			else
+      		if( Key.get_down() && Msp.bConnected == true )
+			{
+				Msp.SendCmd_TRIM_DOWN();
+             	lcd_draw_str( 0, 0, "Down" );
+              	delay(1000);
+			}
+			else
+      		if( Key.get_left() && Msp.bConnected == true )
+			{
+				Msp.SendCmd_TRIM_LEFT();
+              	lcd_draw_str( 0, 0, "Left" );
+              	delay(1000);
+			}	
+			else
+      		if( Key.get_right() && Msp.bConnected == true )
+			{
+				Msp.SendCmd_TRIM_RIGHT();
+             	lcd_draw_str( 0, 0, "Right" );
+              	delay(1000);
+			}
+			else
+      		if( Key.get_enter() )
+			{
+				lcd_redraw();
+				ret_state = MENU_0_IDLE;
+			}	
+			else
+			{
+				lcd_redraw();
+				lcd_draw_str( 0, 0, "Press Key" );				
+			}	
+			break;
+
+		case STATE_MENU_SAVE:
+			run_save();
+			ret_state = MENU_0_IDLE;
+			break;
+
+		default:
+			ret_state = MENU_0_IDLE;
+			break;
+	}
+
+	return ret_state;
+}
+
+
+void run_ble_setup( void )
+{
+	uint8_t err_code;
+	char Str[24];
+	String strRet;
+
+
+	lcd_draw_str( 0, 0, "BLE Setup..." );
+	sprintf(Str, "ret : %d", Ble.setup() );
+	err_code = Ble.send_cmd("AT", strRet, 100);
+	if( err_code == BLE_OK ) lcd_draw_str( 0, 0, "OK" );
+	else                     lcd_draw_str( 0, 0, "FAIL" ); 
+	delay(1000);
+	Msp.bConnected = false;
+}
+
+
+void run_ble_scan( void )
+{
+	char Str[24];
+
+
+	lcd_draw_str( 0, 0, "Scan..." );
+	if( Ble.scan() == BLE_OK &&  Ble.BleList.Count > 0 )
+	{
+		sprintf(Str, "Found.. %d", Ble.BleList.Count);
+		lcd_draw_str( 0, 0, Str);
+	}
+	else
+	{
+		lcd_draw_str( 0, 0, "No Drone" );
+	}
+	delay(1000);
+}
+
+
+void run_ble_connect( uint8_t menu_index )
+{
+	uint8_t err_code;
+	char Str[24];
+
+	lcd_draw_str( 0, 0, "Connecting..." ); 
+	delay(10);
+	err_code = Ble.connect(menu_index);
+	if( err_code == BLE_OK && Ble.bConnected == true )
+	{
+		Ble.BleList.strName[menu_index].toCharArray(Str, 24);
+		lcd_draw_str( 0, 0, Str); 
+		Msp.bConnected = true;
+	}
+	else
+	{
+		lcd_draw_str( 0, 0, "Connect fail" );
+	}
+
+	delay(1000);
+	lcd_redraw();;
+}
+
+
+void run_save( void )
+{
+	lcd_draw_str( 0, 0, "Saving..." ); 
+
+	if( Ble.BleList.Count == 0 )
+	{
+		lcd_draw_str( 0, 0, "Saving..No Data" );
+	}
+	else
+	{
+		Ble.BleList.JoyMode = joy_mode;	
+		Ble.save_list();
+		lcd_draw_str( 0, 0, "Saving..OK" );
+	}
+
+	delay(1000);
+}
 
 
 void change_joymode( void )
 {
 	joy_mode ^= 1;	
+	joy_mode &= 1;
 
 	if( joy_mode == 0 )
 	{
@@ -197,264 +476,55 @@ void change_joymode( void )
 }
 
 
-
-void loop_main()
+int8_t loop_menu( uint8_t ch )
 {
-	uint8_t err_code;
-	char Str[24];
-	static uint32_t tTime;  
-	Key.use_joypad = false;
+	static int8_t menu_cur[MENU_MAX] = { 0, };
+	int8_t ret = -1;
 
 
-	switch( main_state )
+	lcd_draw_menu(ch, menu_cur[ch]);
+
+	if( Key.get_down() )
 	{
-		case STATE_MAIN_MENU:
-			Key.use_joypad = true;
-
-			lcd_draw_menu(0);
-
-			if( Key.get_down() )
-			{
-				menu_current++;	
-				menu_current %= menu_items[0];
-				menu_redraw_required = 1;
-			}
-			if( Key.get_up() )
-			{
-				menu_current--;	
-				menu_current %= menu_items[0];
-				menu_redraw_required = 1;
-			}
-			if( Key.get_enter() )
-			{
-				main_state = STATE_RUN_MENU;
-			}
-
-			take_off_state = 0;
-			take_off       = false;
-			break;
-
-		case STATE_RUN_MENU:
-			main_state = run_menu( menu_current );
-			menu_redraw_required = 1;
-			break;
-
-		case STATE_BLE_LIST:
-			lcd_draw_ble_list();
-
-			if( Key.get_right() )
-			{
-				menu_current++;	
-				menu_current %= Ble.BleList.Count;
-				menu_redraw_required = 1;
-			}
-			if( Key.get_left() )
-			{
-				menu_current--;	
-				menu_current %= Ble.BleList.Count;
-				menu_redraw_required = 1;
-			}
-			if( Key.get_enter() == true )
-			{
-				main_state = STATE_CONNECT;
-			}		
-			if( Key.get_up() == true )
-			{
-				menu_current = MENU_CONNECT;
-				main_state = STATE_MAIN_MENU;
-				menu_redraw_required = 1;
-			}				
-			break;
-
-		case STATE_CONNECT:
-			lcd_draw_str( 0, 0, "Connecting..." ); 
-			delay(10);
-			err_code = Ble.connect(menu_current);
-			if( err_code == BLE_OK && Ble.bConnected == true )
-			{
-				Ble.BleList.strName[menu_current].toCharArray(Str, 24);
-				lcd_draw_str( 0, 0, Str); 
-				Msp.bConnected = true;
-			}
-			else
-			{
-				lcd_draw_str( 0, 0, "Connect fail" );
-			}
-
-			delay(1000);
-			menu_redraw_required = 1;
-			main_state = STATE_MAIN_MENU;
-			break;
-
-		case STATE_REMOTE:
-			if( (millis()-tTime) > 200 )
-			{
-				menu_redraw_required = 1;
-				tTime = millis();
-			}
-			lcd_draw_remote();
-			
-			if( Key.get_enter() )
-			{
-				main_state = STATE_MAIN_MENU;
-				menu_redraw_required = 1;
-			}		
-
-			if( Key.get_down() && Msp.bConnected == true )
-			{
-				Msp.SendCmd_ARM();
-			}	
-			if( Key.get_up() && Msp.bConnected == true )
-			{
-				Msp.SendCmd_DISARM();
-			}	
-
-			loop_take_off();
-			break;
-
-		case STATE_TRIM:
-			if( Key.get_up() && Msp.bConnected == true )
-			{
-				Msp.SendCmd_TRIM_UP();
-            	lcd_draw_str( 0, 0, "Up" );
-              	delay(1000);			   
-			}
-      		if( Key.get_down() && Msp.bConnected == true )
-			{
-				Msp.SendCmd_TRIM_DOWN();
-             	lcd_draw_str( 0, 0, "Down" );
-              	delay(1000);
-			}
-      		if( Key.get_left() && Msp.bConnected == true )
-			{
-				Msp.SendCmd_TRIM_LEFT();
-              	lcd_draw_str( 0, 0, "Left" );
-              	delay(1000);
-			}	
-      		if( Key.get_right() && Msp.bConnected == true )
-			{
-				Msp.SendCmd_TRIM_RIGHT();
-             	lcd_draw_str( 0, 0, "Right" );
-              	delay(1000);
-			}
-      		if( Key.get_enter() )
-			{
-        		lcd_draw_remote();
-				main_state = STATE_REMOTE;
-        		menu_redraw_required = 1;
-			}
-                        
-      		loop_take_off();
-			break;
-
-		case 0xFF:
-			break;
+		menu_cur[ch]++;	
+		menu_cur[ch] %= menu_items[ch];
+		lcd_redraw();
 	}
+	if( Key.get_up() )
+	{
+		if( menu_cur[ch] > 0 )
+			menu_cur[ch]--;
+		else
+			menu_cur[ch] = menu_items[ch]-1;	
+		menu_cur[ch] %= menu_items[ch];
+		lcd_redraw();
+	}
+
+	return menu_cur[ch];
 }
 
 
-
-
-
-uint8_t run_menu( int menu_sel )
+int8_t loop_menu_ble_list( void )
 {
-	char Str[24];
-	char StrConv[24];
-	String strRet;
-	uint8_t err_code;
-	uint8_t i;
-	uint8_t ret_state = STATE_MAIN_MENU;
+	static int8_t menu_current = 0;
+	int8_t ret = -1;
 
+	lcd_draw_ble_list(menu_current);
 
-	switch( menu_sel )
+	if( Key.get_down() )
 	{
-		case MENU_BLESETUP:
-			lcd_draw_str( 0, 0, "BLE Setup..." );
-			sprintf(Str, "ret : %d", Ble.setup() );
-			err_code = Ble.send_cmd("AT", strRet, 100);
-			if( err_code == BLE_OK ) lcd_draw_str( 0, 0, "OK" );
-			else                     lcd_draw_str( 0, 0, "FAIL" ); 
-
-			//strRet.toCharArray(Str, 20);
-			//lcd_draw_str( 0, 1, Str );	
-
-			//delay(1000);
-			//sprintf(Str, "ret : %d", err_code);
-			//lcd_draw_str( 0, 2, Str );	
-
-			delay(1000);
-			Msp.bConnected = false;
-
-			ret_state = STATE_MAIN_MENU;		
-			break;
-
-		case MENU_SCAN:
-			lcd_draw_str( 0, 0, "Scan..." );
-			if( Ble.scan() == BLE_OK &&  Ble.BleList.Count > 0 )
-			{
-				sprintf(Str, "Found.. %d", Ble.BleList.Count);
-				lcd_draw_str( 0, 0, Str);
-			}
-			else
-			{
-				lcd_draw_str( 0, 0, "No Drone" );
-			}
-
-			delay(1000);
-			ret_state = STATE_MAIN_MENU;
-			break;
-
-		case MENU_CONNECT:
-			if( Ble.BleList.Count > 0 )
-			{
-				menu_current = 0;
-				ret_state = STATE_BLE_LIST;
-			}
-			else
-			{
-				lcd_draw_str( 0, 0, "No Drone" );
-				delay(1000);
-				ret_state = STATE_MAIN_MENU;
-			}
-			break;
-
-		case MENU_REMOTE:
-			lcd_draw_str( 0, 0, "Remote..." );
-			//delay(1000);		
-			ret_state = STATE_REMOTE;
-			break;
-    
-    case MENU_TRIM:
-      lcd_draw_str( 0, 0, "Press Button" );
-      delay(1000);     
-
-      if( Key.get_enter() )
-      {
-         ret_state = STATE_REMOTE; 
-      }
-
-      ret_state = STATE_TRIM;
-      
-			break;
-
-		case MENU_SAVE:
-			lcd_draw_str( 0, 0, "Saving..." ); 
-
-			if( Ble.BleList.Count == 0 )
-			{
-				lcd_draw_str( 0, 0, "Saving..No Data" );
-			}
-			else
-			{	
-				Ble.save_list();
-				lcd_draw_str( 0, 0, "Saving..OK" );
-			}
-
-			delay(1000);		
-			break;
+		menu_current++;	
+		menu_current %= Ble.BleList.Count;
+		lcd_redraw();
+	}
+	if( Key.get_up() )
+	{
+		menu_current--;	
+		menu_current %= Ble.BleList.Count;
+		lcd_redraw();
 	}
 
-	return ret_state;
+	return menu_current;
 }
 
 
@@ -495,11 +565,11 @@ void loop_joystick()
 		if( take_off == false )
 		{
 			// 0~1000
-			joy_thrust = constrain( JoyR.get_pitch(), 0, 500 );
+			joy_thrust = constrain( pJoy[1]->get_pitch(), 0, 500 );
 			joy_thrust = map( joy_thrust, 0, 500, 0, 1000 );
 
       		// Left turn/Right turn (-500~500)
-      		joy_yaw = map( JoyL.get_roll(), -500, 500, -350, 350);      
+      		joy_yaw = map( pJoy[1]->get_roll(), -500, 500, -100, 100);      
 		}
 		else
 		{
@@ -520,8 +590,8 @@ void loop_joystick()
 				Thrust = Thrust + joy_thrust;
 				Thrust = constrain( Thrust, 0, 800 );				
 				#else
-				joy_thrust = map( JoyR.get_pitch(), -500, 500,  -500, 500 );
-        		joy_yaw = map( JoyL.get_roll(), -500, 500, -350, 350);  
+				joy_thrust = map( pJoy[1]->get_pitch(), -500, 500,  -500, 500 );
+        		joy_yaw = map( pJoy[1]->get_roll(), -500, 500, -100, 100);  
         
 				joy_thrust = take_off_thrust + joy_thrust;
 				Thrust = constrain( joy_thrust, 0, 800 );								
@@ -531,13 +601,13 @@ void loop_joystick()
 		}
 
      	// Left/Right(-500~500)
-		joy_roll = map( JoyR.get_roll(), -500, 500,  -100, 100 );
+		joy_roll = map( pJoy[0]->get_roll(), -500, 500,  -100, 100 );
 
 		// Up/Down(500~-500)
-		joy_pitch = map( JoyL.get_pitch(), -500, 500, -100, 100 );
+		joy_pitch = map( pJoy[0]->get_pitch(), -500, 500, -100, 100 );
 
 
-		if( Msp.bConnected == true )
+		if( Msp.bConnected == true && remote_mode == 1 )
 		{
 			Roll   = joy_roll;
 			Pitch  = joy_pitch;
@@ -609,7 +679,7 @@ void loop_take_off( )
 
 
 
-void lcd_draw_menu( uint8_t ch )
+void lcd_draw_menu( uint8_t ch, uint8_t sel_index )
 {
 	uint8_t i, h;
 	u8g_uint_t w, d;
@@ -643,7 +713,7 @@ void lcd_draw_menu( uint8_t ch )
 
 			d = (w-u8g.getStrWidth(pStr))/2;
 			u8g.setDefaultForegroundColor();
-			if ( i == menu_current ) 
+			if ( i == sel_index ) 
 			{
 				u8g.drawBox(0, i*h+1, w, h);
       			u8g.setDefaultBackgroundColor();
@@ -659,10 +729,13 @@ void lcd_draw_menu( uint8_t ch )
 }
 
 
+void lcd_redraw(void)
+{
+	menu_redraw_required = 1;
+}
 
 
-
-void lcd_draw_ble_list( void )
+void lcd_draw_ble_list( uint8_t sel_index )
 {
 	uint8_t i, h;
 	u8g_uint_t w, d;
@@ -687,7 +760,7 @@ void lcd_draw_ble_list( void )
 
 			d = (w-u8g.getStrWidth(StrList))/2;
 			u8g.setDefaultForegroundColor();
-			if ( i == menu_current ) 
+			if ( i == sel_index ) 
 			{
 				u8g.drawBox(0, i*h+1, w, h);
       			u8g.setDefaultBackgroundColor();
@@ -738,20 +811,13 @@ void lcd_draw_remote( void )
 	u8g.firstPage();  
   	do 
   	{
-		sprintf(Str, "L : %d, %d", JoyL.get_roll(), JoyL.get_pitch());
+		sprintf(Str, "Thrust : %d", take_off_thrust );
 		u8g.drawStr( 0*w, 0*h+1, Str);
 
-		//sprintf(Str, "LP : %d", JoyL.get_pitch());
-		//u8g.drawStr( 0*w, 1*h+1, Str);
 
-		sprintf(Str, "R : %d, %d", JoyR.get_roll(), JoyR.get_pitch());
-		u8g.drawStr( 0*w, 1*h+1, Str);
-
-		//sprintf(Str, "RP : %d", JoyR.get_pitch());
-		//u8g.drawStr( 0*w, 3*h+1, Str);
 		sprintf(Str, "RP : %d, %d", joy_roll, joy_pitch);
 		u8g.drawStr( 0*w, 2*h+1, Str);
-		sprintf(Str, "TR : %d", Thrust);
+		sprintf(Str, "TY : %d, %d", Thrust, joy_yaw);
 		u8g.drawStr( 0*w, 3*h+1, Str);
 
 

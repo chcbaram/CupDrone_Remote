@@ -40,6 +40,7 @@ typedef struct
 	int      Count;
 	String strName[5];
 	String strAddr[5];	
+	uint8_t JoyMode;		
 } BLE_LIST;
 
 typedef struct 
@@ -47,7 +48,8 @@ typedef struct
 	int      Count;
 	uint32_t SaveFlag;
 	char strName[5][16];
-	char strAddr[5][16];	
+	char strAddr[5][16];
+	uint8_t JoyMode;	
 } BLE_LIST_EEPROM;
 
 
